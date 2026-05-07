@@ -243,13 +243,24 @@
             btn.classList.add('active');
         }
 
-        function openFullscreen(safeName, camName) {
+        async function openFullscreen(safeName, camName) {
             currentCam = camName || safeName;
             currentView = 'ai';
-            document.getElementById('modal-name').textContent = currentCam;
+            document.getElementById('modal-name').textContent = currentCam + ' — snapping fresh photo...';
             document.getElementById('modal-img').src = '/snapshot/ai/' + encodeURIComponent(currentCam) + '?t=' + Date.now();
             document.getElementById('modal-img').classList.remove('zoomed');
             document.getElementById('modal').classList.add('active');
+            // Snap a fresh photo (wakes camera) then reload
+            try {
+                await fetch('/api/refresh?snap=true', { method: 'POST' });
+                const prefix = currentView === 'ai' ? '/snapshot/ai/' : currentView === 'heatmap' ? '/snapshot/heatmap/' : '/snapshot/';
+                document.getElementById('modal-img').src = prefix + encodeURIComponent(currentCam) + '?t=' + Date.now();
+                document.getElementById('modal-name').textContent = currentCam;
+                loadDashboard();
+            } catch(e) {
+                console.error('Snap failed:', e);
+                document.getElementById('modal-name').textContent = currentCam;
+            }
         }
 
         function closeFullscreen() { document.getElementById('modal').classList.remove('active'); }

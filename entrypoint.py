@@ -8,10 +8,47 @@ import asyncio
 import logging
 import os
 import sys
+import time
 
 from aiohttp import web
 import web_dashboard
 from blink2telegram import BlinkTelegramDaemon, setup_logging, load_config
+
+# Track last battery alert time per camera (epoch)
+_last_battery_alert: dict[str, float] = {}
+BATTERY_ALERT_INTERVAL = 12 * 3600  # 12 hours
+
+
+async def check_battery_alerts(uploader):
+    """Send Telegram alert every 12h for cameras with low battery or offline status."""
+    if not web_dashboard._blink:
+        return
+    now = time.time()
+    for name, cam in web_dashboard._blink.cameras.items():
+        health = web_dashboard.get_camera_health(cam)
+        if health["status"] not in ("low_battery", "offline"):
+            continue
+        last_sent = _last_battery_alert.get(name, 0)
+        if now - last_sent < BATTERY_ALERT_INTERVAL:
+            continue
+        # Build alert message
+        voltage = health.get("battery_voltage", "?")
+        status = health["status"].replace("_", " ").upper()
+        reason = health.get("reason") or ""
+        msg = (
+            f"🔋 <b>Battery Alert: {name}</b>\n"
+            f"Status: <b>{status}</b>\n"
+            f"Battery: {health.get('battery', '?')} ({voltage}mV)\n"
+        )
+        if reason:
+            msg += f"Reason: {reason}\n"
+        msg += f"\nChecked at {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        try:
+            await uploader.send_text(msg)
+            _last_battery_alert[name] = now
+            logging.getLogger(__name__).info(f"Battery alert sent for {name}: {status}")
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to send battery alert for {name}: {e}")
 
 
 async def run_combined():
@@ -70,6 +107,11 @@ async def run_combined():
                     await daemon.fetch_local_storage_clips()
                 except Exception as e:
                     logger.error(f"Local storage sync error: {e}")
+                # Battery health check — alert every 12h
+                try:
+                    await check_battery_alerts(daemon.uploader)
+                except Exception as e:
+                    logger.error(f"Battery alert error: {e}")
                 if cycle % 10 == 0:
                     try:
                         await daemon.blink.save(config["credentials_file"])
