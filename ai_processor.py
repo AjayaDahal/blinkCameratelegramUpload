@@ -60,7 +60,7 @@ def load_model():
 
     try:
         from ultralytics import YOLO
-        model_path = os.environ.get("YOLO_MODEL", "yolov8n.pt")
+        model_path = os.environ.get("YOLO_MODEL", "yolov8s.pt")
         logger.info(f"Loading YOLO model: {model_path}")
         _model = YOLO(model_path)
         # Warm up
@@ -75,7 +75,7 @@ def load_model():
         return None
 
 
-def detect_objects(image_bytes: bytes, camera_name: str, confidence: float = 0.35) -> dict:
+def detect_objects(image_bytes: bytes, camera_name: str, confidence: float = 0.25) -> dict:
     """
     Run object detection on an image.
 
