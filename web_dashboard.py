@@ -24,12 +24,17 @@ from blinkpy.blinkpy import Blink
 from blinkpy.auth import Auth
 from blinkpy.helpers.util import json_load
 
+import ai_processor
+
 logger = logging.getLogger(__name__)
 
 # Shared state
 _blink: Blink | None = None
 _config: dict = {}
 _snapshot_cache: dict[str, bytes] = {}
+_annotated_cache: dict[str, bytes] = {}
+_heatmap_cache: dict[str, bytes] = {}
+_detection_results: dict[str, dict] = {}
 _last_refresh: str = "never"
 
 
@@ -105,6 +110,20 @@ async def refresh_snapshots(snap=False):
     for name, camera in _blink.cameras.items():
         if camera.image_from_cache:
             _snapshot_cache[name] = camera.image_from_cache
+            # Run AI detection
+            try:
+                result = ai_processor.detect_objects(camera.image_from_cache, name)
+                _annotated_cache[name] = result["annotated_image"]
+                _detection_results[name] = result
+            except Exception as e:
+                logger.warning(f"AI detection failed for {name}: {e}")
+            # Generate motion heatmap
+            try:
+                heatmap = ai_processor.generate_motion_heatmap(camera.image_from_cache, name)
+                if heatmap:
+                    _heatmap_cache[name] = heatmap
+            except Exception as e:
+                logger.warning(f"Heatmap failed for {name}: {e}")
 
     _last_refresh = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -152,161 +171,75 @@ def get_camera_health(camera) -> dict:
 # ---- Routes ----
 
 async def handle_index(request):
-    cameras_html = ""
-    for name, camera in (_blink.cameras.items() if _blink else {}.items()):
-        health = get_camera_health(camera)
-        if health["status"] == "offline":
-            badge = '<span style="background:#ff4444;color:#fff;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:10px;">OFFLINE</span>'
-            badge += f'<span style="color:#ff8888;font-size:11px;margin-left:8px;">{health["reason"]}</span>'
-        elif health["status"] == "low_battery":
-            badge = '<span style="background:#ff8800;color:#fff;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:10px;">LOW BATTERY</span>'
-        else:
-            badge = '<span style="background:#00cc44;color:#fff;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:10px;">ONLINE</span>'
+    """Serve the static dashboard HTML page."""
+    html_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
+    return web.FileResponse(html_path)
 
-        temp = getattr(camera, 'temperature', '?')
-        battery_v = health.get('battery_voltage', '?')
-        wifi = health.get('wifi_strength', '?')
-        info_line = f'<div style="padding:4px 16px;font-size:11px;color:#888;">{temp}°F | Battery: {health["battery"]} ({battery_v}mV) | WiFi: {wifi}dBm</div>'
 
-        cameras_html += f"""
-        <div class="camera-card" style="{'border-color:#ff444455;' if health['status'] == 'offline' else ''}">
-            <h2>{name}{badge}</h2>
-            {info_line}
-            <img src="/snapshot/{name}" alt="{name}" id="cam-{name.replace(' ','_')}" />
-            <div class="cam-actions">
-                <button onclick="refreshCam('{name}')">Snap New Photo</button>
-            </div>
-        </div>
-        """
+async def handle_snapshot_ai(request):
+    """Serve AI-annotated snapshot with bounding boxes."""
+    name = request.match_info["name"]
+    if name in _annotated_cache and _annotated_cache[name]:
+        return web.Response(body=_annotated_cache[name], content_type="image/jpeg")
+    # Fall back to raw snapshot
+    if name in _snapshot_cache and _snapshot_cache[name]:
+        return web.Response(body=_snapshot_cache[name], content_type="image/jpeg")
+    return web.Response(text="No snapshot available", status=404)
 
-    # Recent clips
+
+async def handle_snapshot_heatmap(request):
+    """Serve motion heatmap image."""
+    name = request.match_info["name"]
+    if name in _heatmap_cache and _heatmap_cache[name]:
+        return web.Response(body=_heatmap_cache[name], content_type="image/jpeg")
+    if name in _snapshot_cache and _snapshot_cache[name]:
+        return web.Response(body=_snapshot_cache[name], content_type="image/jpeg")
+    return web.Response(text="No heatmap available", status=404)
+
+
+async def handle_api_dashboard(request):
+    """Main JSON endpoint for the dashboard — cameras, clips, timeline, stats."""
+    cameras = []
+    if _blink:
+        for name, cam in _blink.cameras.items():
+            health = get_camera_health(cam)
+            det = _detection_results.get(name, {})
+            cameras.append({
+                "name": name,
+                "temperature": getattr(cam, "temperature", "?"),
+                "battery": health.get("battery", "?"),
+                "battery_voltage": health.get("battery_voltage", "?"),
+                "wifi_strength": health.get("wifi_strength", "?"),
+                "health_status": health["status"],
+                "health_reason": health.get("reason", ""),
+                "alert_level": det.get("alert_level", "none"),
+                "ai_summary": det.get("summary", "No AI data yet"),
+                "det_counts": dict(ai_processor.get_detection_stats().get(name, {})),
+            })
+
     clip_dir = _config.get("clip_download_path", "/app/clips")
-    clips = sorted(glob.glob(os.path.join(clip_dir, "*.mp4")),
-                   key=os.path.getmtime, reverse=True)[:12]
-    clips_html = ""
-    for clip_path in clips:
-        fname = os.path.basename(clip_path)
-        size = os.path.getsize(clip_path) / (1024 * 1024)
-        mtime = datetime.fromtimestamp(os.path.getmtime(clip_path)).strftime("%Y-%m-%d %H:%M")
-        clips_html += f"""
-        <div class="clip-card">
-            <video controls preload="metadata" width="320">
-                <source src="/clips/{fname}" type="video/mp4" />
-            </video>
-            <p><strong>{fname}</strong><br/>{size:.1f} MB | {mtime}</p>
-        </div>
-        """
+    clip_files = sorted(glob.glob(os.path.join(clip_dir, "*.mp4")),
+                        key=os.path.getmtime, reverse=True)[:12]
+    clips = []
+    for cp in clip_files:
+        clips.append({
+            "filename": os.path.basename(cp),
+            "size_mb": f"{os.path.getsize(cp) / (1024*1024):.1f}",
+            "mtime": datetime.fromtimestamp(os.path.getmtime(cp)).strftime("%Y-%m-%d %H:%M"),
+        })
 
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Blink Camera Dashboard</title>
-<style>
-    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-           background: #0a0a0a; color: #e0e0e0; padding: 20px; }}
-    h1 {{ text-align: center; margin-bottom: 8px; color: #00d4ff;
-          font-size: 28px; letter-spacing: 1px; }}
-    .subtitle {{ text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }}
-    .status-bar {{ display: flex; justify-content: center; gap: 30px;
-                   margin-bottom: 30px; padding: 12px; background: #111;
-                   border-radius: 10px; border: 1px solid #222; flex-wrap: wrap; }}
-    .status-item {{ text-align: center; }}
-    .status-item .label {{ font-size: 11px; color: #888; text-transform: uppercase; }}
-    .status-item .value {{ font-size: 18px; font-weight: bold; color: #00d4ff; }}
-    .section-title {{ font-size: 20px; margin: 30px 0 15px; color: #fff;
-                      border-bottom: 2px solid #00d4ff33; padding-bottom: 8px; }}
-    .cameras {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-                gap: 20px; margin-bottom: 30px; }}
-    .camera-card {{ background: #111; border-radius: 12px; overflow: hidden;
-                    border: 1px solid #222; transition: border-color 0.3s; }}
-    .camera-card:hover {{ border-color: #00d4ff55; }}
-    .camera-card h2 {{ padding: 12px 16px; font-size: 16px; background: #151515;
-                       border-bottom: 1px solid #222; }}
-    .camera-card img {{ width: 100%; display: block; min-height: 240px;
-                        object-fit: contain; background: #000; }}
-    .cam-actions {{ padding: 10px 16px; text-align: right; }}
-    .cam-actions button, .refresh-all {{ cursor: pointer; padding: 8px 18px;
-        border: 1px solid #00d4ff44; background: #00d4ff15; color: #00d4ff;
-        border-radius: 6px; font-size: 13px; transition: all 0.2s; }}
-    .cam-actions button:hover, .refresh-all:hover {{ background: #00d4ff30; }}
-    .clips {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-              gap: 16px; }}
-    .clip-card {{ background: #111; border-radius: 10px; overflow: hidden;
-                  border: 1px solid #222; }}
-    .clip-card video {{ width: 100%; display: block; background: #000; }}
-    .clip-card p {{ padding: 10px; font-size: 12px; color: #aaa; }}
-    .refresh-all {{ display: block; margin: 0 auto 20px; font-size: 15px; padding: 10px 30px; }}
-    .spinner {{ display: none; width: 20px; height: 20px; border: 2px solid #00d4ff33;
-                border-top-color: #00d4ff; border-radius: 50%; animation: spin 0.8s linear infinite;
-                margin: 0 auto; }}
-    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-    .live-dot {{ display: inline-block; width: 8px; height: 8px; background: #0f0;
-                 border-radius: 50%; margin-right: 6px; animation: blink-dot 2s infinite; }}
-    @keyframes blink-dot {{ 50% {{ opacity: 0.3; }} }}
-</style>
-</head>
-<body>
-    <h1>Blink Camera Dashboard</h1>
-    <p class="subtitle"><span class="live-dot"></span>Live View &mdash; No Subscription Required</p>
+    timeline = ai_processor.get_detection_history()[-50:]
+    timeline.reverse()
 
-    <div class="status-bar">
-        <div class="status-item">
-            <div class="label">Cameras</div>
-            <div class="value">{len(_blink.cameras) if _blink else 0}</div>
-        </div>
-        <div class="status-item">
-            <div class="label">Last Refresh</div>
-            <div class="value" id="last-refresh">{_last_refresh}</div>
-        </div>
-        <div class="status-item">
-            <div class="label">Local Clips</div>
-            <div class="value">{len(clips)}</div>
-        </div>
-    </div>
-
-    <button class="refresh-all" onclick="refreshAll()">Refresh All Cameras</button>
-    <div class="spinner" id="spinner"></div>
-
-    <h3 class="section-title">Live Cameras</h3>
-    <div class="cameras">{cameras_html if cameras_html else '<p style="color:#666;">No cameras found. Check Blink credentials.</p>'}</div>
-
-    <h3 class="section-title">Recent Motion Clips</h3>
-    <div class="clips">{clips_html if clips_html else '<p style="color:#666;">No clips yet. Motion events will appear here.</p>'}</div>
-
-    <script>
-        async function refreshAll() {{
-            document.getElementById('spinner').style.display = 'block';
-            try {{
-                const r = await fetch('/api/refresh?snap=true', {{ method: 'POST' }});
-                const data = await r.json();
-                document.getElementById('last-refresh').textContent = data.last_refresh;
-                // Reload all images with cache bust
-                document.querySelectorAll('.camera-card img').forEach(img => {{
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                }});
-            }} catch(e) {{ console.error(e); }}
-            document.getElementById('spinner').style.display = 'none';
-        }}
-
-        async function refreshCam(name) {{
-            const r = await fetch('/api/refresh', {{ method: 'POST' }});
-            const img = document.getElementById('cam-' + name.replace(/ /g, '_'));
-            if (img) img.src = '/snapshot/' + encodeURIComponent(name) + '?t=' + Date.now();
-        }}
-
-        // Auto-refresh every 30 seconds
-        setInterval(() => {{
-            document.querySelectorAll('.camera-card img').forEach(img => {{
-                img.src = img.src.split('?')[0] + '?t=' + Date.now();
-            }});
-        }}, 30000);
-    </script>
-</body>
-</html>"""
-    return web.Response(text=html, content_type="text/html")
+    return web.json_response({
+        "num_cameras": len(cameras),
+        "last_refresh": _last_refresh,
+        "num_clips": len(clip_files),
+        "total_detections": len(ai_processor.get_detection_history()),
+        "cameras": cameras,
+        "clips": clips,
+        "timeline": timeline,
+    })
 
 
 async def handle_snapshot(request):
@@ -373,9 +306,12 @@ def create_app():
     app = web.Application()
     app.on_startup.append(on_startup)
     app.router.add_get("/", handle_index)
+    app.router.add_get("/snapshot/ai/{name}", handle_snapshot_ai)
+    app.router.add_get("/snapshot/heatmap/{name}", handle_snapshot_heatmap)
     app.router.add_get("/snapshot/{name}", handle_snapshot)
     app.router.add_post("/api/refresh", handle_api_refresh)
     app.router.add_get("/api/status", handle_api_status)
+    app.router.add_get("/api/dashboard", handle_api_dashboard)
     app.router.add_get("/clips/{filename}", handle_clips_file)
     return app
 

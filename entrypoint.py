@@ -27,9 +27,12 @@ async def run_combined():
     # Start web server first (don't block on snapshots)
     app = web.Application()
     app.router.add_get("/", web_dashboard.handle_index)
+    app.router.add_get("/snapshot/ai/{name}", web_dashboard.handle_snapshot_ai)
+    app.router.add_get("/snapshot/heatmap/{name}", web_dashboard.handle_snapshot_heatmap)
     app.router.add_get("/snapshot/{name}", web_dashboard.handle_snapshot)
     app.router.add_post("/api/refresh", web_dashboard.handle_api_refresh)
     app.router.add_get("/api/status", web_dashboard.handle_api_status)
+    app.router.add_get("/api/dashboard", web_dashboard.handle_api_dashboard)
     app.router.add_get("/clips/{filename}", web_dashboard.handle_clips_file)
 
     runner = web.AppRunner(app)

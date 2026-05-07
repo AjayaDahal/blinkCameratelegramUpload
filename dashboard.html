@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blink AI Dashboard</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0a0a0a; color: #e0e0e0; padding: 16px; }
+    h1 { text-align: center; margin-bottom: 4px; color: #00d4ff; font-size: 26px; }
+    .subtitle { text-align: center; color: #555; margin-bottom: 20px; font-size: 13px; }
+
+    .status-bar { display: flex; justify-content: center; gap: 24px; margin-bottom: 20px;
+                   padding: 10px 20px; background: #111; border-radius: 10px; border: 1px solid #1a1a1a; flex-wrap: wrap; }
+    .status-item { text-align: center; }
+    .status-item .label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+    .status-item .value { font-size: 20px; font-weight: bold; color: #00d4ff; }
+
+    .section-title { font-size: 18px; margin: 24px 0 12px; color: #fff;
+                      border-bottom: 2px solid #00d4ff22; padding-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+
+    .cameras { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .camera-card { background: #111; border-radius: 12px; overflow: hidden;
+                    border: 1px solid #1a1a1a; transition: all 0.3s; cursor: pointer; }
+    .camera-card:hover { border-color: #00d4ff44; transform: translateY(-2px); box-shadow: 0 8px 30px #00000080; }
+    .card-header { padding: 10px 14px; background: #0d0d0d; border-bottom: 1px solid #1a1a1a; }
+    .card-header h2 { font-size: 15px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .cam-info { font-size: 11px; color: #555; margin-top: 4px; }
+
+    .badge { padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .badge-online { background: #00cc44; color: #fff; }
+    .badge-offline { background: #ff4444; color: #fff; }
+    .badge-warn { background: #ff8800; color: #fff; }
+    .badge-alert-high { background: #ff2222; color: #fff; animation: pulse-alert 2s infinite; }
+    .badge-alert-med { background: #2277ff; color: #fff; }
+    .badge-alert-low { background: #44aa44; color: #fff; }
+    .badge-reason { color: #ff8888; font-size: 11px; }
+    @keyframes pulse-alert { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+    .cam-view-container { position: relative; }
+    .cam-img { width: 100%; display: block; min-height: 200px; object-fit: contain; background: #000; }
+    .view-toggle { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px;
+                    background: #000000aa; border-radius: 6px; padding: 2px; }
+    .toggle-btn { padding: 4px 10px; border: none; background: transparent; color: #888;
+                   font-size: 11px; cursor: pointer; border-radius: 4px; transition: all 0.2s; }
+    .toggle-btn.active { background: #00d4ff33; color: #00d4ff; }
+    .toggle-btn:hover { color: #fff; }
+    .ai-summary { position: absolute; bottom: 0; left: 0; right: 0; padding: 6px 12px;
+                   background: linear-gradient(transparent, #000000cc); color: #ccc; font-size: 12px; }
+
+    .cam-actions { padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; }
+    .cam-actions button { cursor: pointer; padding: 6px 14px; border: 1px solid #00d4ff33;
+        background: #00d4ff10; color: #00d4ff; border-radius: 6px; font-size: 12px; transition: all 0.2s; }
+    .cam-actions button:hover { background: #00d4ff25; }
+
+    .det-stats { display: flex; gap: 6px; flex-wrap: wrap; }
+    .stat-chip { padding: 2px 8px; background: #ffffff0a; border: 1px solid #ffffff15;
+                  border-radius: 10px; font-size: 10px; color: #888; }
+
+    .clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+    .clip-card { background: #111; border-radius: 10px; overflow: hidden; border: 1px solid #1a1a1a; }
+    .clip-card video { width: 100%; display: block; background: #000; }
+    .clip-card p { padding: 8px 10px; font-size: 11px; color: #888; }
+
+    .timeline { max-height: 300px; overflow-y: auto; background: #0d0d0d; border-radius: 10px;
+                 border: 1px solid #1a1a1a; }
+    .timeline-event { padding: 8px 14px; border-bottom: 1px solid #111; font-size: 12px; transition: background 0.2s; }
+    .timeline-event:hover { background: #151515; }
+    .tl-high { border-left: 3px solid #ff4444; }
+    .tl-medium { border-left: 3px solid #4488ff; }
+    .tl-low { border-left: 3px solid #44aa44; }
+    .tl-none { border-left: 3px solid #333; }
+    .tl-time { float: right; color: #555; font-size: 11px; }
+
+    .refresh-all { display: block; margin: 0 auto 16px; padding: 8px 24px; cursor: pointer;
+        border: 1px solid #00d4ff33; background: #00d4ff10; color: #00d4ff; border-radius: 8px;
+        font-size: 14px; transition: all 0.2s; }
+    .refresh-all:hover { background: #00d4ff25; }
+    .spinner { display: none; width: 18px; height: 18px; border: 2px solid #00d4ff33;
+                border-top-color: #00d4ff; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .live-dot { display: inline-block; width: 8px; height: 8px; background: #0f0;
+                 border-radius: 50%; margin-right: 6px; animation: blink-dot 2s infinite; }
+    @keyframes blink-dot { 50% { opacity: 0.3; } }
+
+    /* Fullscreen modal */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                      background: #000000ee; z-index: 1000; justify-content: center; align-items: center;
+                      flex-direction: column; }
+    .modal-overlay.active { display: flex; }
+    .modal-img { max-width: 95vw; max-height: 80vh; object-fit: contain; border-radius: 8px;
+                  cursor: zoom-in; transition: transform 0.3s; }
+    .modal-img.zoomed { cursor: zoom-out; transform: scale(2); }
+    .modal-controls { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+    .modal-controls button { padding: 8px 20px; border: 1px solid #00d4ff44; background: #00d4ff15;
+                              color: #00d4ff; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .modal-controls button:hover { background: #00d4ff30; }
+    .modal-close { position: absolute; top: 16px; right: 24px; font-size: 28px; color: #fff;
+                    cursor: pointer; z-index: 1001; background: none; border: none; }
+    .modal-camera-name { color: #00d4ff; font-size: 18px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+    <h1>Blink AI Dashboard</h1>
+    <p class="subtitle"><span class="live-dot"></span>Live View with AI Detection &mdash; No Subscription</p>
+
+    <div class="status-bar">
+        <div class="status-item"><div class="label">Cameras</div><div class="value" id="num-cameras">-</div></div>
+        <div class="status-item"><div class="label">Last Scan</div><div class="value" id="last-refresh">-</div></div>
+        <div class="status-item"><div class="label">Clips</div><div class="value" id="num-clips">-</div></div>
+        <div class="status-item"><div class="label">AI Detections</div><div class="value" id="num-detections">-</div></div>
+    </div>
+
+    <button class="refresh-all" onclick="refreshAll()">Refresh &amp; Scan All Cameras</button>
+    <div class="spinner" id="spinner"></div>
+
+    <h3 class="section-title">📷 Live Cameras</h3>
+    <div class="cameras" id="cameras-grid"></div>
+
+    <h3 class="section-title">🔍 Detection Timeline</h3>
+    <div class="timeline" id="timeline"></div>
+
+    <h3 class="section-title">🎬 Recent Clips</h3>
+    <div class="clips" id="clips-grid"></div>
+
+    <!-- Fullscreen Modal -->
+    <div class="modal-overlay" id="modal">
+        <button class="modal-close" onclick="closeFullscreen()">&times;</button>
+        <div class="modal-camera-name" id="modal-name"></div>
+        <img class="modal-img" id="modal-img" onclick="toggleZoom()" />
+        <div class="modal-controls">
+            <button onclick="switchModalView('ai')">🔍 AI View</button>
+            <button onclick="switchModalView('raw')">📷 Raw</button>
+            <button onclick="switchModalView('heatmap')">🌡️ Heatmap</button>
+            <button onclick="downloadImg()">💾 Save</button>
+        </div>
+    </div>
+
+    <script>
+        let currentCam = '';
+        let currentView = 'ai';
+
+        async function loadDashboard() {
+            const r = await fetch('/api/dashboard');
+            const data = await r.json();
+
+            document.getElementById('num-cameras').textContent = data.num_cameras;
+            document.getElementById('last-refresh').textContent = data.last_refresh;
+            document.getElementById('num-clips').textContent = data.num_clips;
+            document.getElementById('num-detections').textContent = data.total_detections;
+
+            // Cameras
+            const grid = document.getElementById('cameras-grid');
+            grid.innerHTML = '';
+            if (data.cameras.length === 0) {
+                grid.innerHTML = '<p style="color:#555;">No cameras found.</p>';
+                return;
+            }
+            data.cameras.forEach(cam => {
+                const safeName = cam.name.replace(/ /g, '_').replace(/'/g, '');
+                let badges = '';
+                if (cam.health_status === 'offline') {
+                    badges += `<span class="badge badge-offline">OFFLINE</span><span class="badge-reason">${cam.health_reason}</span>`;
+                } else if (cam.health_status === 'low_battery') {
+                    badges += '<span class="badge badge-warn">LOW BATTERY</span>';
+                } else {
+                    badges += '<span class="badge badge-online">ONLINE</span>';
+                }
+                if (cam.alert_level === 'high') badges += '<span class="badge badge-alert-high">PERSON</span>';
+                else if (cam.alert_level === 'medium') badges += '<span class="badge badge-alert-med">VEHICLE</span>';
+                else if (cam.alert_level === 'low') badges += '<span class="badge badge-alert-low">ANIMAL</span>';
+
+                let statsHtml = '';
+                if (cam.det_counts && Object.keys(cam.det_counts).length > 0) {
+                    statsHtml = '<div class="det-stats">';
+                    Object.entries(cam.det_counts).sort((a,b) => b[1]-a[1]).slice(0,4).forEach(([cls, cnt]) => {
+                        statsHtml += `<span class="stat-chip">${cls}: ${cnt}</span>`;
+                    });
+                    statsHtml += '</div>';
+                }
+
+                let borderStyle = '';
+                if (cam.health_status === 'offline') borderStyle = 'border-color:#ff444455;';
+                else if (cam.alert_level === 'high') borderStyle = 'border-color:#ff444488;';
+
+                const card = document.createElement('div');
+                card.className = 'camera-card';
+                card.style.cssText = borderStyle;
+                card.onclick = () => openFullscreen(safeName, cam.name);
+                card.title = 'Click for fullscreen';
+                card.innerHTML = `
+                    <div class="card-header">
+                        <h2>${cam.name} ${badges}</h2>
+                        <div class="cam-info">${cam.temperature}°F | Batt: ${cam.battery} (${cam.battery_voltage}mV) | WiFi: ${cam.wifi_strength}dBm</div>
+                    </div>
+                    <div class="cam-view-container">
+                        <img src="/snapshot/ai/${encodeURIComponent(cam.name)}?t=${Date.now()}" alt="${cam.name}" id="cam-${safeName}" class="cam-img" />
+                        <div class="view-toggle">
+                            <button class="toggle-btn active" onclick="event.stopPropagation(); switchView('${safeName}', '${cam.name}', 'ai', this)">AI</button>
+                            <button class="toggle-btn" onclick="event.stopPropagation(); switchView('${safeName}', '${cam.name}', 'raw', this)">Raw</button>
+                            <button class="toggle-btn" onclick="event.stopPropagation(); switchView('${safeName}', '${cam.name}', 'heatmap', this)">Heat</button>
+                        </div>
+                        <div class="ai-summary">${cam.ai_summary}</div>
+                    </div>
+                    <div class="cam-actions">
+                        ${statsHtml}
+                        <button onclick="event.stopPropagation(); refreshCam('${cam.name}')">Snap Photo</button>
+                    </div>`;
+                grid.appendChild(card);
+            });
+
+            // Timeline
+            const tl = document.getElementById('timeline');
+            tl.innerHTML = '';
+            if (data.timeline.length === 0) {
+                tl.innerHTML = '<div style="color:#555;padding:12px;">No detection events yet.</div>';
+            } else {
+                data.timeline.forEach(ev => {
+                    const icons = {high:'🚨', medium:'🚗', low:'🐾', none:'📹'};
+                    tl.innerHTML += `<div class="timeline-event tl-${ev.alert_level}">${icons[ev.alert_level]||'📹'} <strong>${ev.camera}</strong> — ${ev.summary} <span class="tl-time">${ev.timestamp.slice(0,19).replace('T',' ')}</span></div>`;
+                });
+            }
+
+            // Clips
+            const cg = document.getElementById('clips-grid');
+            cg.innerHTML = '';
+            if (data.clips.length === 0) {
+                cg.innerHTML = '<p style="color:#555;">No clips yet.</p>';
+            } else {
+                data.clips.forEach(clip => {
+                    cg.innerHTML += `<div class="clip-card"><video controls preload="metadata"><source src="/clips/${clip.filename}" type="video/mp4" /></video><p><strong>${clip.filename}</strong><br/>${clip.size_mb} MB | ${clip.mtime}</p></div>`;
+                });
+            }
+        }
+
+        function switchView(safeName, camName, mode, btn) {
+            const img = document.getElementById('cam-' + safeName);
+            if (!img) return;
+            const prefix = mode === 'ai' ? '/snapshot/ai/' : mode === 'heatmap' ? '/snapshot/heatmap/' : '/snapshot/';
+            img.src = prefix + encodeURIComponent(camName) + '?t=' + Date.now();
+            btn.parentElement.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+
+        function openFullscreen(safeName, camName) {
+            currentCam = camName || safeName;
+            currentView = 'ai';
+            document.getElementById('modal-name').textContent = currentCam;
+            document.getElementById('modal-img').src = '/snapshot/ai/' + encodeURIComponent(currentCam) + '?t=' + Date.now();
+            document.getElementById('modal-img').classList.remove('zoomed');
+            document.getElementById('modal').classList.add('active');
+        }
+
+        function closeFullscreen() { document.getElementById('modal').classList.remove('active'); }
+
+        function toggleZoom() { document.getElementById('modal-img').classList.toggle('zoomed'); }
+
+        function switchModalView(mode) {
+            currentView = mode;
+            const prefix = mode === 'ai' ? '/snapshot/ai/' : mode === 'heatmap' ? '/snapshot/heatmap/' : '/snapshot/';
+            document.getElementById('modal-img').src = prefix + encodeURIComponent(currentCam) + '?t=' + Date.now();
+        }
+
+        function downloadImg() {
+            const a = document.createElement('a');
+            a.href = document.getElementById('modal-img').src;
+            a.download = currentCam.replace(/ /g, '_') + '_' + currentView + '.jpg';
+            a.click();
+        }
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeFullscreen();
+            if (e.key === '1') switchModalView('ai');
+            if (e.key === '2') switchModalView('raw');
+            if (e.key === '3') switchModalView('heatmap');
+        });
+
+        async function refreshAll() {
+            document.getElementById('spinner').style.display = 'block';
+            try {
+                await fetch('/api/refresh?snap=true', { method: 'POST' });
+                await loadDashboard();
+            } catch(e) { console.error(e); }
+            document.getElementById('spinner').style.display = 'none';
+        }
+
+        async function refreshCam(name) {
+            await fetch('/api/refresh', { method: 'POST' });
+            await loadDashboard();
+        }
+
+        // Initial load & auto-refresh
+        loadDashboard();
+        setInterval(loadDashboard, 30000);
+    </script>
+</body>
+</html>
