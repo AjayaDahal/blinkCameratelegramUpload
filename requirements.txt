@@ -1,0 +1,4 @@
+blinkpy==0.25.5
+python-telegram-bot==22.7
+aiohttp>=3.9
+aiofiles>=23.0

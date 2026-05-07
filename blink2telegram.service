@@ -1,0 +1,22 @@
+[Unit]
+Description=Blink Camera to Telegram Backup Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aj
+WorkingDirectory=/home/aj/Project/BLINK CAMERA
+ExecStart=/home/aj/Project/BLINK CAMERA/venv/bin/python /home/aj/Project/BLINK CAMERA/blink2telegram.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/aj/Project/BLINK CAMERA
+
+[Install]
+WantedBy=multi-user.target

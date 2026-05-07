@@ -1,0 +1,10 @@
+.env
+venv/
+__pycache__/
+*.pyc
+data/
+clips/
+*.db
+*.log
+blink_creds.json
+first_auth.py

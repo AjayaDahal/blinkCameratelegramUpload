@@ -1,0 +1,15 @@
+{
+    "blink_username": "",
+    "blink_password": "",
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "poll_interval_seconds": 60,
+    "clip_download_path": "/app/clips",
+    "credentials_file": "/app/data/blink_creds.json",
+    "db_file": "/app/data/uploaded_clips.db",
+    "max_local_clips_mb": 500,
+    "enable_local_storage_sync": true,
+    "enable_cloud_sync": true,
+    "send_thumbnail": true,
+    "log_file": "/app/data/blink2telegram.log"
+}

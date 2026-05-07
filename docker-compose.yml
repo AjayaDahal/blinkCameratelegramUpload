@@ -1,0 +1,24 @@
+services:
+  blink2telegram:
+    build: .
+    container_name: blink2telegram
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    volumes:
+      - ./data:/app/data
+      - ./clips:/app/clips
+      - ./config.json:/app/config.json:ro
+    env_file:
+      - .env
+    environment:
+      - WEB_PORT=8080
+    networks:
+      - default
+    # stdin_open + tty for initial 2FA prompt
+    stdin_open: true
+    tty: true
+
+networks:
+  default:
+    driver: bridge
