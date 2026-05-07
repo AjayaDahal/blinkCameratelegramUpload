@@ -15,6 +15,8 @@ import json
 import logging
 import os
 import glob
+import re
+import time
 from datetime import datetime
 
 from aiohttp import web
@@ -107,14 +109,69 @@ async def refresh_snapshots(snap=False):
     _last_refresh = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def get_camera_health(camera) -> dict:
+    """Detect if camera is likely offline/dead by checking thumbnail staleness."""
+    thumb = getattr(camera, "thumbnail", "") or ""
+    # Extract ts= param from thumbnail URL
+    ts_match = re.search(r'[?&]ts=(\d+)', thumb)
+    if ts_match:
+        thumb_ts = int(ts_match.group(1))
+        age_days = (time.time() - thumb_ts) / 86400
+    else:
+        thumb_ts = None
+        age_days = None
+
+    battery = getattr(camera, "battery", None)
+    battery_voltage = None
+    if hasattr(camera, "attributes"):
+        battery_voltage = camera.attributes.get("battery_voltage")
+
+    wifi = getattr(camera, "wifi_strength", None)
+
+    # Determine status
+    if age_days is not None and age_days > 7:
+        status = "offline"
+        reason = f"Last seen {int(age_days)} days ago"
+    elif battery_voltage is not None and battery_voltage < 100:
+        status = "low_battery"
+        reason = f"Battery voltage: {battery_voltage}"
+    else:
+        status = "online"
+        reason = None
+
+    return {
+        "status": status,
+        "reason": reason,
+        "battery": battery,
+        "battery_voltage": battery_voltage,
+        "thumbnail_age_days": round(age_days, 1) if age_days is not None else None,
+        "wifi_strength": wifi,
+    }
+
+
 # ---- Routes ----
 
 async def handle_index(request):
     cameras_html = ""
-    for name in (_blink.cameras if _blink else {}):
+    for name, camera in (_blink.cameras.items() if _blink else {}.items()):
+        health = get_camera_health(camera)
+        if health["status"] == "offline":
+            badge = '<span style="background:#ff4444;color:#fff;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:10px;">OFFLINE</span>'
+            badge += f'<span style="color:#ff8888;font-size:11px;margin-left:8px;">{health["reason"]}</span>'
+        elif health["status"] == "low_battery":
+            badge = '<span style="background:#ff8800;color:#fff;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:10px;">LOW BATTERY</span>'
+        else:
+            badge = '<span style="background:#00cc44;color:#fff;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:10px;">ONLINE</span>'
+
+        temp = getattr(camera, 'temperature', '?')
+        battery_v = health.get('battery_voltage', '?')
+        wifi = health.get('wifi_strength', '?')
+        info_line = f'<div style="padding:4px 16px;font-size:11px;color:#888;">{temp}°F | Battery: {health["battery"]} ({battery_v}mV) | WiFi: {wifi}dBm</div>'
+
         cameras_html += f"""
-        <div class="camera-card">
-            <h2>{name}</h2>
+        <div class="camera-card" style="{'border-color:#ff444455;' if health['status'] == 'offline' else ''}">
+            <h2>{name}{badge}</h2>
+            {info_line}
             <img src="/snapshot/{name}" alt="{name}" id="cam-{name.replace(' ','_')}" />
             <div class="cam-actions">
                 <button onclick="refreshCam('{name}')">Snap New Photo</button>
@@ -223,7 +280,7 @@ async def handle_index(request):
         async function refreshAll() {{
             document.getElementById('spinner').style.display = 'block';
             try {{
-                const r = await fetch('/api/refresh?snap=true', { method: 'POST' });
+                const r = await fetch('/api/refresh?snap=true', {{ method: 'POST' }});
                 const data = await r.json();
                 document.getElementById('last-refresh').textContent = data.last_refresh;
                 // Reload all images with cache bust
@@ -271,10 +328,16 @@ async def handle_api_status(request):
     cameras = {}
     if _blink:
         for name, cam in _blink.cameras.items():
+            health = get_camera_health(cam)
             cameras[name] = {
                 "armed": cam.arm,
                 "temperature": getattr(cam, "temperature", None),
                 "battery": getattr(cam, "battery", None),
+                "battery_voltage": health.get("battery_voltage"),
+                "wifi_strength": health.get("wifi_strength"),
+                "status": health["status"],
+                "status_reason": health.get("reason"),
+                "thumbnail_age_days": health.get("thumbnail_age_days"),
                 "last_motion": str(getattr(cam, "last_motion", "")),
             }
 
